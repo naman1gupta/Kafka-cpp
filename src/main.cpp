@@ -53,6 +53,10 @@ int main(int argc, char* argv[]) {
     
     int client_fd = accept(server_fd, reinterpret_cast<struct sockaddr*>(&client_addr), &client_addr_len);
     std::cout << "Client connected\n";
+    int messageSize = htonl(0);
+    int correlation_id = htonl(7);
+    write(client_fd, &messageSize, 4);
+    write(client_fd, &correlation_id, 4);
     close(client_fd); 
     close(server_fd);
     return 0;
