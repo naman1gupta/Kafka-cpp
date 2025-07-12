@@ -294,7 +294,7 @@ int main(int argc, char *argv[])
                 *ptr++ = 0xFF; // Next Cursor (0xff, indicating a null value.)
                 *ptr++ = TAG_BUFFER;
             }
-            if (request_api_key == 0x0001) // Fetch
+            if (request_api_key == 0x0001)
             {
                 *ptr++ = TAG_BUFFER;
                 write_int32_be(&ptr, 0); // (throttle_time_ms)
