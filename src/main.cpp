@@ -1,170 +1,137 @@
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
-
-#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
-#include <memory>
-#include <mutex>
-#include <thread>
+#include <netdb.h>
+#include <string>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 
-#include "KafkaResponse.h"
-class Socket {
-private:
-    int fd_ = -1;
+inline void write_int32_be(uint8_t **dest, int32_t value)
+{
+    (*dest)[0] = (value >> 24) & 0xFF;
+    (*dest)[1] = (value >> 16) & 0xFF;
+    (*dest)[2] = (value >> 8) & 0xFF;
+    (*dest)[3] = value & 0xFF;
+    (*dest) += 4;
+}
 
-public:
-    Socket(int domain, int type, int protocol = 0) {
-        fd_ = socket(domain, type, protocol);
-        if (fd_ < 0) {
-            throw std::system_error(errno, std::system_category(), "socket creation failed");
-        }
-    }
+inline void write_int16_be(uint8_t **dest, int16_t value)
+{
+    (*dest)[0] = (value >> 8) & 0xFF;
+    (*dest)[1] = value & 0xFF;
+    (*dest) += 2;
+}
 
-    // TODO
-    // check unsuccesfull completion (if close return -1)
-    ~Socket() {
-        if (fd_ >= 0) {
-            close(fd_);
-        }
-    }
-
-    void bind(sockaddr_in &address) {
-        if (::bind(fd_, reinterpret_cast<struct sockaddr *>(&address), sizeof(address)) != 0) {
-            throw std::system_error(errno, std::system_category(), "bind failed");
-        }
-    }
-
-    void listen(int backlog) {
-        if (::listen(fd_, backlog) != 0) {
-            throw std::system_error(errno, std::system_category(), "listen failed");
-        }
-    }
-
-    int accept(sockaddr_in &client_addr) {
-        socklen_t addr_len = sizeof(client_addr);
-        int client_fd = ::accept(fd_, reinterpret_cast<struct sockaddr *>(&client_addr), &addr_len);
-        if (client_fd < 0) {
-            throw std::system_error(errno, std::system_category(), "accept failed");
-        }
-        return client_fd;
-    }
-
-    operator int() const {
-        return fd_;
-    }
-};
-
-class ClientConnection {
-private:
-    int fd_;
-    std::atomic<bool> is_active_ = true;
-
-public:
-    explicit ClientConnection(int fd) : fd_(fd) {
-    }
-    ~ClientConnection() {
-        if (fd_ >= 0) {
-            close(fd_);
-        }
-    }
-
-    std::vector<char> read_full() {
-        std::vector<char> buffer(1024);
-        ssize_t n = recv(fd_, buffer.data(), buffer.size(), 0);
-        if (n == 0) {
-            throw std::runtime_error("Connection closed by client");
-            is_active_ = false;
-        }
-        if (n < 0) {
-            is_active_ = false;
-            throw std::system_error(errno, std::system_category(), "recv failed");
-        }
-        buffer.resize(n);
-        return buffer;
-    }
-    void write_full(const char *data, size_t size) {
-        write(fd_, data, size);
-    }
-
-    operator int() const {
-        return fd_;
-    }
-    bool IsActive() const {
-        return is_active_;
-    }
-};
-
-// https://www.youtube.com/watch?v=xGDLkt-jBJ4&t=2659s
-// NB: smart_ptr pass by value
-void HandleClient(std::unique_ptr<ClientConnection> client) {
-    while (client->IsActive()) {
-        try {
-            std::cout << "Client connected" << std::endl;
-            auto buffer = client->read_full();
-            ResponseHandler response_handler(buffer.data());
-            const char *response_buffer = response_handler.GetResponseBuffer();
-            size_t response_size = response_handler.GetResponseSize();
-            client->write_full(response_buffer, response_size);
-            std::cout << "Client handled" << std::endl;
-        } catch (std::runtime_error &e) {
-            std::cout << "Client disconnected" << std::endl;
-        }
+inline void copy_bytes(uint8_t **dest, char *src, int cnt)
+{
+    for (int i = 0; i < cnt; ++i)
+    {
+    	*(*dest)++ =  src[i];
     }
 }
-int main(int argc, char *argv[]) {
+
+int main(int argc, char* argv[])
+{
     // Disable output buffering
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
 
-    try {
-        Socket server_fd(AF_INET, SOCK_STREAM, 0);
-        // Since the tester restarts your program quite often, setting SO_REUSEADDR
-        // ensures that we don't run into 'Address already in use' errors
-        int reuse = 1;
-        if (setsockopt(static_cast<int>(server_fd), SOL_SOCKET, SO_REUSEADDR, &reuse,
-                       sizeof(reuse)) < 0) {
-            close(server_fd);
-            std::cout << "setsockopt failed: " << std::endl;
-            return 1;
-        }
-        sockaddr_in server_addr{};
-        server_addr.sin_family = AF_INET;
-        server_addr.sin_addr.s_addr = INADDR_ANY;
-        server_addr.sin_port = htons(9092);
-
-        server_fd.bind(server_addr);
-        int connection_backlog = 5;
-        server_fd.listen(connection_backlog);
-
-        std::cout << "Listening on port 9092..." << std::endl;
-
-        std::vector<std::thread> workers;
-        while (true) {
-            try {
-                struct sockaddr_in client_addr{};
-
-                socklen_t client_addr_len = sizeof(client_addr);
-                int client_fd = server_fd.accept(client_addr);
-                std::unique_ptr<ClientConnection> client =
-                    std::make_unique<ClientConnection>(client_fd);
-                workers.emplace_back(HandleClient, std::move(client));
-            } catch (std::exception &e) {
-                std::cout << "Error occured" << e.what() << std::endl;
-            }
-        }
-
-        for (auto &t : workers) {
-            if (t.joinable())
-                t.join();
-        }
-
-    } catch (const std::exception &e) {
-        std::cout << "Server error: " << e.what() << std::endl;
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        std::cerr << "Failed to create server socket: " << std::endl;
+        return 1;
     }
+
+    // Since the tester restarts your program quite often, setting SO_REUSEADDR
+    // ensures that we don't run into 'Address already in use' errors
+    int reuse = 1;
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+        close(server_fd);
+        std::cerr << "setsockopt failed: " << std::endl;
+        return 1;
+    }
+
+    struct sockaddr_in server_addr{};
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(9092);
+
+    if (bind(server_fd, reinterpret_cast<struct sockaddr*>(&server_addr), sizeof(server_addr)) != 0) {
+        close(server_fd);
+        std::cerr << "Failed to bind to port 9092" << std::endl;
+        return 1;
+    }
+
+    int connection_backlog = 5;
+    if (listen(server_fd, connection_backlog) != 0) {
+        close(server_fd);
+        std::cerr << "listen failed" << std::endl;
+        return 1;
+    }
+
+    std::cout << "Waiting for a client to connect...\n";
+
+    struct sockaddr_in client_addr{};
+    socklen_t client_addr_len = sizeof(client_addr);
+
+    // You can use print statements as follows for debugging, they'll be visible when running tests.
+    std::cerr << "Logs from your program will appear here!\n";
+    
+    while (1) 
+    {
+        int client_fd = accept(server_fd, reinterpret_cast<struct sockaddr *>(&client_addr), &client_addr_len);
+        if (fork() != 0)
+            continue;
+        std::cout << "Client connected\n";
+
+        char req_buf[1024];
+        uint8_t resp_buf[1024];
+        while (size_t bytes_read = read(client_fd, req_buf, 1024))
+        {
+
+            req_buf[bytes_read] = 0;
+            memset(resp_buf, 0, 1024);
+            uint8_t *ptr = resp_buf + 4;
+            constexpr int cor_id_offset = 8;
+            copy_bytes(&ptr, &req_buf[cor_id_offset], 4);
+
+            constexpr int req_api_offset = 4;
+            int16_t request_api_version = ((uint8_t)req_buf[req_api_offset + 2] |
+                                           (uint8_t)req_buf[req_api_offset + 3]);
+
+            int error_code = 35;
+            if (request_api_version <= 4)
+            {
+                error_code = 0;
+            }
+            write_int16_be(&ptr, error_code);
+
+            // https://kafka.apache.org/protocol.html#The_Messages_ApiVersions
+            int8_t num_api_keys = 1 + 1; // 1 + # of elements because 0 is null array and 1 is empty array
+
+            int8_t tag_buffer_byte = 0;
+
+            *ptr++ = num_api_keys;
+            copy_bytes(&ptr, &req_buf[req_api_offset], 2); // api_key
+            write_int16_be(&ptr, 0);                       // min_ver
+            write_int16_be(&ptr, request_api_version);     // max_ver
+            *ptr++ = tag_buffer_byte;
+
+            write_int32_be(&ptr, 0); // throttle_time_ms
+            *ptr++ = tag_buffer_byte;
+
+            int message_size = ptr - resp_buf;
+            ptr = resp_buf;
+            write_int32_be(&ptr, message_size - 4);
+
+            write(client_fd, resp_buf, message_size);
+        }
+
+        close(client_fd);
+    }
+
+    close(server_fd);
     return 0;
 }
