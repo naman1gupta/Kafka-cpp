@@ -291,7 +291,6 @@ int main(int argc, char *argv[])
                     }
                     topic_offset += topic_name.length() + 2;
                 }
-
                 *ptr++ = 0xFF; // Next Cursor (0xff, indicating a null value.)
                 *ptr++ = TAG_BUFFER;
             }
