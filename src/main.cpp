@@ -281,7 +281,7 @@ int main(int argc, char *argv[])
                     {
                         write_int16_be(&ptr, 3); // (UNKNOWN_TOPIC)
                         copy_bytes(&ptr, &req_buf[topic_offset], topic_name.length() + 1);
-                        for (int i = 0; i < 16; ++i) // topic_id
+                        for (int i = 0; i < 16; ++i) 
                             *ptr++ = 0;
 
                         *ptr++ = 0;                       // topic.is_internal
