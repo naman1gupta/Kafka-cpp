@@ -78,6 +78,5 @@ int main(int argc, char* argv[]) {
     send(client_fd, &correlation_id, sizeof(correlation_id), 0);
     close(client_fd); 
     close(server_fd);
-    
     return 0;
 }
