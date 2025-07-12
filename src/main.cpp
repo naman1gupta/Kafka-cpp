@@ -52,11 +52,31 @@ int main(int argc, char* argv[]) {
     socklen_t client_addr_len = sizeof(client_addr);    
     
     int client_fd = accept(server_fd, reinterpret_cast<struct sockaddr*>(&client_addr), &client_addr_len);
+    if (client_fd < 0) {
+        std::cerr << "Failed to accept a client connection: " << std::endl;
+        close(server_fd);
+        return 1;
+    }
     std::cout << "Client connected\n";
-    int messageSize = htonl(0);
-    int correlation_id = htonl(7);
-    write(client_fd, &messageSize, 4);
-    write(client_fd, &correlation_id, 4);
+    char buffer[1024];
+    ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer), 0);
+    if (bytes_read <= 0) {
+        std::cerr << "Failed to read request or client disconnected" << std::endl;
+        close(client_fd);
+        close(server_fd);
+        return 1;
+    }
+
+
+    // prepare response
+    int32_t correlation_id;
+    memcpy(&correlation_id, buffer+8, sizeof(correlation_id));
+    int32_t message_size = htonl(sizeof(correlation_id));
+
+    // send response
+    send(client_fd, &message_size, sizeof(message_size), 0);
+    send(client_fd, &correlation_id, sizeof(correlation_id), 0);
+
     close(client_fd); 
     close(server_fd);
     return 0;
