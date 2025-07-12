@@ -251,7 +251,6 @@ int main(int argc, char *argv[])
                         }
                         curr_idx = next_part;
                     }
-
                     if (found_topic)
                     {
                         write_int16_be(&ptr, 0); // (NO_ERROR)
