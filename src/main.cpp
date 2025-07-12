@@ -76,7 +76,6 @@ int main(int argc, char* argv[])
     }
 
     std::cout << "Waiting for a client to connect...\n";
-
     struct sockaddr_in client_addr{};
     socklen_t client_addr_len = sizeof(client_addr);
 
@@ -116,7 +115,7 @@ int main(int argc, char* argv[])
 
             // https://kafka.apache.org/protocol.html#The_Messages_ApiVersions
             constexpr int8_t TAG_BUFFER = 0;
-            
+
             if (request_api_key == 0x004b) // DescribeTopicPartitions
             {
                 constexpr int client_id_offset = cor_id_offset + 4;
