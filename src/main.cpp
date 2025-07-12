@@ -58,24 +58,22 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     std::cout << "Client connected\n";
-    char buffer[1024];
-    ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer), 0);
-    if (bytes_read <= 0) {
-        std::cerr << "Failed to read request or client disconnected" << std::endl;
-        close(client_fd);
-        close(server_fd);
-        return 1;
-    }
-
-
-    // prepare response
-    int32_t correlation_id;
-    memcpy(&correlation_id, buffer+8, sizeof(correlation_id));
-    int32_t message_size = htonl(sizeof(correlation_id));
-
-    // send response
+        struct client_request {
+        int message_size;
+        int16_t request_api_key;
+        int16_t request_api_version;
+        int correlation_id;
+    } request;
+    recv(client_fd, &request, sizeof(request), 0);
+    int message_size = 0;
     send(client_fd, &message_size, sizeof(message_size), 0);
+    int correlation_id = request.correlation_id;
     send(client_fd, &correlation_id, sizeof(correlation_id), 0);
+    int16_t error_code = 0x2300;
+    send(client_fd, &error_code, sizeof(error_code), 0);
+    char buffer[1024];
+    recv(client_fd, buffer, sizeof(buffer), 0);
+
     close(client_fd); 
     close(server_fd);
     return 0;
