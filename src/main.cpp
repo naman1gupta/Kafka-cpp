@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include <cstring>
+#include <cstdint>
 #include <iostream>
 #include <netdb.h>
 #include <string>
@@ -49,32 +50,125 @@ int main(int argc, char* argv[]) {
     std::cout << "Waiting for a client to connect...\n";
 
     struct sockaddr_in client_addr{};
-    socklen_t client_addr_len = sizeof(client_addr);    
+    socklen_t client_addr_len = sizeof(client_addr);
+
+
+
+
+    // You can use print statements as follows for debugging, they'll be visible when running tests.
+    std::cerr << "Logs from your program will appear here!\n";
+    
     
     int client_fd = accept(server_fd, reinterpret_cast<struct sockaddr*>(&client_addr), &client_addr_len);
-    if (client_fd < 0) {
-        std::cerr << "Failed to accept a client connection: " << std::endl;
-        close(server_fd);
-        return 1;
-    }
-    std::cout << "Client connected\n";
-        struct client_request {
-        int message_size;
-        int16_t request_api_key;
-        int16_t request_api_version;
-        int correlation_id;
-    } request;
-    recv(client_fd, &request, sizeof(request), 0);
-    int message_size = 0;
-    send(client_fd, &message_size, sizeof(message_size), 0);
-    int correlation_id = request.correlation_id;
-    send(client_fd, &correlation_id, sizeof(correlation_id), 0);
-    int16_t error_code = 0x2300;
-    send(client_fd, &error_code, sizeof(error_code), 0);
-    char buffer[1024];
-    recv(client_fd, buffer, sizeof(buffer), 0);
 
-    close(client_fd); 
+
+    if (client_fd == -1) {
+        throw std::runtime_error("Failed to accept connection");
+    }
+    // Read the request
+    size_t RESPONSE_MAX_SIZE = 1024;
+    void* buff = malloc(RESPONSE_MAX_SIZE);
+    
+    ssize_t bytes_read = read(client_fd, buff, RESPONSE_MAX_SIZE);
+
+
+    printf("Read %ld bytes.\n", bytes_read);
+
+    uint32_t message_size_nw =  *((uint32_t*) buff);
+    int32_t  message_size = ntohl(message_size_nw);
+
+    uint16_t* cursor =  (uint16_t*) buff;
+
+    cursor += 2;
+    uint16_t api_key_nw =  *((uint16_t*) cursor);
+    int16_t api_key = ntohs(api_key_nw);
+
+    cursor += 1;
+    uint16_t api_version_nw =  *((uint16_t*) cursor);
+    int16_t api_version = ntohs(api_version_nw);
+
+    cursor += 1;
+
+    uint32_t correlation_id_nw = *((uint32_t*) cursor);
+    int32_t correlation_id = ntohl(correlation_id_nw);
+
+
+    // printf("message_size: %d at addr %ld\n", message_size, buff);
+    // printf("api_key: %d at addr %ld\n", api_key, cursor);
+    // printf("api_version: %d at addr %ld\n", api_version, cursor);
+    // printf("correlation_id: %d at addr %ld\n", correlation_id, cursor);
+
+    // char* tmp = (char*) buff;
+
+    // for (size_t i  = 0; i < 10; i++) {
+    //     printf("%ld: byte %ld, %d\n",tmp, i,*tmp);
+    //     tmp++;
+    // }
+
+    free(buff);
+
+    // Tag buffer
+
+    uint8_t tag_buffer = 0x00;
+
+    // Error code
+
+    uint16_t error_code = 0;
+
+    // Check API-version
+    if (api_version < 0) error_code = 35;
+    if (api_version > 4) error_code = 35;
+
+    uint16_t error_code_nw = htons(error_code);
+
+    // Throttle time
+
+    uint32_t throttle_time_ms = htonl(10);
+
+    // API-keys
+
+    uint16_t api_versions[] = {
+        htons(18),
+        htons(0),
+        htons(4)
+    };
+
+    uint8_t num_of_api_keys = 1 + 1;
+
+    // Message size
+
+    uint32_t response_size = htonl(
+        sizeof(correlation_id) +
+        sizeof(error_code) + 
+        sizeof(num_of_api_keys) +
+        sizeof(api_versions) +
+        sizeof(tag_buffer) +
+        sizeof(throttle_time_ms) +
+        sizeof(tag_buffer)
+    );
+
+    // Send response
+    ssize_t bytes_sent = 0;
+    bytes_sent += send(client_fd, &response_size, sizeof(response_size), 0);
+    bytes_sent += send(client_fd, &correlation_id_nw, sizeof(correlation_id_nw), 0);
+    bytes_sent += send(client_fd, &error_code_nw , sizeof(error_code), 0);
+    bytes_sent += send(client_fd, &num_of_api_keys, sizeof(num_of_api_keys), 0);
+    bytes_sent += send(client_fd, &api_versions, sizeof(api_versions), 0);
+    bytes_sent += send(client_fd, &tag_buffer, sizeof(tag_buffer), 0);
+    bytes_sent += send(client_fd, &throttle_time_ms, sizeof(throttle_time_ms), 0);
+    bytes_sent += send(client_fd, &tag_buffer, sizeof(tag_buffer), 0);
+
+    
+
+
+    if (bytes_sent == -1) {
+        throw std::runtime_error("Failed to send response");
+    }
+    printf("Sent %ld bytes.\n", bytes_sent);
+
+
+    // Wrap-up
+    close(client_fd);
     close(server_fd);
     return 0;
 }
