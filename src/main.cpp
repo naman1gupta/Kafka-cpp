@@ -324,7 +324,6 @@ int main(int argc, char *argv[])
                     int16_t error_code = 100; // (UNKNOWN_TOPIC_ID)
                     size_t compact_records_length = 0;
                     uint8_t record_data[1024];
-
                     while (curr_log_idx < total_bytes_in_log)
                     {
                         int batch_length_idx = curr_log_idx + 8;
