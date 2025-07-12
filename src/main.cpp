@@ -1,6 +1,5 @@
 #include <cstdlib>
 #include <cstring>
-#include <cstdint>
 #include <iostream>
 #include <netdb.h>
 #include <string>
@@ -8,11 +7,40 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <fcntl.h>
+#include <string_view>
+#include <cassert>
 
-int main(int argc, char* argv[]) {
+inline void write_int32_be(uint8_t **dest, int32_t value)
+{
+    (*dest)[0] = (value >> 24) & 0xFF;
+    (*dest)[1] = (value >> 16) & 0xFF;
+    (*dest)[2] = (value >> 8) & 0xFF;
+    (*dest)[3] = value & 0xFF;
+    (*dest) += 4;
+}
+
+inline void write_int16_be(uint8_t **dest, int16_t value)
+{
+    (*dest)[0] = (value >> 8) & 0xFF;
+    (*dest)[1] = value & 0xFF;
+    (*dest) += 2;
+}
+
+inline void copy_bytes(uint8_t **dest, char *src, int cnt)
+{
+    for (int i = 0; i < cnt; ++i)
+    {
+    	*(*dest)++ =  src[i];
+    }
+}
+
+int main(int argc, char* argv[])
+{
     // Disable output buffering
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
+    setbuf(stdout, 0);
 
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
@@ -52,123 +80,143 @@ int main(int argc, char* argv[]) {
     struct sockaddr_in client_addr{};
     socklen_t client_addr_len = sizeof(client_addr);
 
-
-
-
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     std::cerr << "Logs from your program will appear here!\n";
     
-    
-    int client_fd = accept(server_fd, reinterpret_cast<struct sockaddr*>(&client_addr), &client_addr_len);
+    while (1) 
+    {
+        int client_fd = accept(server_fd, reinterpret_cast<struct sockaddr *>(&client_addr), &client_addr_len);
+        if (fork() != 0)
+            continue;
+        std::cout << "Client connected\n";
+
+        char req_buf[1024];
+        uint8_t resp_buf[1024];
+        while (size_t bytes_read = read(client_fd, req_buf, 1024))
+        {
+
+            req_buf[bytes_read] = 0;
+            memset(resp_buf, 0, 1024);
+            uint8_t *ptr = resp_buf + 4;
+            constexpr int cor_id_offset = 8;
+            copy_bytes(&ptr, &req_buf[cor_id_offset], 4);
+
+            constexpr int req_api_offset = 4;
+            int16_t request_api_key = ((uint8_t)req_buf[req_api_offset + 0] |
+                                       (uint8_t)req_buf[req_api_offset + 1]);
+
+            int16_t request_api_version = ((uint8_t)req_buf[req_api_offset + 2] |
+                                           (uint8_t)req_buf[req_api_offset + 3]);
+
+            int error_code = 35; // (UNSUPPORTED_VERSION)
+            if (request_api_version <= 4)
+            {
+                error_code = 0; // (NO_ERROR)
+            }
+
+            // https://kafka.apache.org/protocol.html#The_Messages_ApiVersions
+            constexpr int8_t TAG_BUFFER = 0;
+            
+            if (request_api_key == 0x004b) // DescribeTopicPartitions
+            {
+                constexpr int client_id_offset = cor_id_offset + 4;
+                int client_id_len = ((uint8_t)req_buf[client_id_offset] | (uint8_t)req_buf[client_id_offset + 1]) + /* TAG_BUFFER BYTE */ 1 + /* LENGTH BYTES */ 2;
+                int topic_offset = client_id_offset+client_id_len;
+                *ptr++ = TAG_BUFFER;
+                write_int32_be(&ptr, 0);  // throttle_time_ms
+                *ptr++ = req_buf[topic_offset++]; // topic.length
+                
+                int log_fd = open("/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log", O_RDONLY, S_IRUSR);
+                assert(log_fd != -1);
+                uint8_t metadata[1024];
+                size_t log_bytes = read(log_fd, metadata, 1024);
+                std::cout << "log_bytes count: " << log_bytes << '\n';
+                for (int i = 0; i < log_bytes; ++i)
+                	printf("%02X ", metadata[i]);
+                constexpr int log_topic_offset = 162;
+                std::string_view log_topic_name((char*)metadata+log_topic_offset);
+                std::cout << "log_topic_name: " << log_topic_name << '\n';
+
+                std::string_view topic_name(&req_buf[topic_offset+1]);
+                std::cout << "topic_name: " << topic_name << '\n';
 
 
-    if (client_fd == -1) {
-        throw std::runtime_error("Failed to accept connection");
+                if (log_topic_name == topic_name)
+                {
+                    write_int16_be(&ptr, 0); // (NO_ERROR)
+                    copy_bytes(&ptr, &req_buf[topic_offset], topic_name.length()+1);
+                    copy_bytes(&ptr, (char *)metadata + log_topic_offset+log_topic_name.length(), 16);
+                    *ptr++ = 0; // topic.is_internal
+                    *ptr++ = 2; // # of partitions  == 1
+                    write_int16_be(&ptr, 0); // # Partition 0 - Error Code (INT16, 0)
+                    write_int32_be(&ptr, 0); // # Partition 0 - Partition Index (INT32, 0)
+                    write_int32_be(&ptr, 1); // # Partition 0 - Leader ID (INT32, 1)
+                    write_int32_be(&ptr, 0); // # Partition 0 - Leader Epoch (INT32, 0)
+                    *ptr++ = 2; // # Partition 0 - Replica nodes length + 1 (1 replica node)
+                    write_int32_be(&ptr, 1); // #   - Replica node 1 (INT32, 1)
+                    *ptr++ = 2; // # Partition 0 - ISR Nodes length + 1 (INT32, 2)
+                    write_int32_be(&ptr, 1); // #   - ISR Node 1 (INT32, 1)
+                    *ptr++ = 1; // # Partition 0 - Eligible Leader Replicas count + 1 (INT32, 1) => 0 leader replicas
+                    *ptr++ = 1; // # Partition 0 - Last Known ELR count + 1 (INT32, 1) => 0 last known leader replica
+                    *ptr++ = 1; // # Partition 0 - Offline replicas count + 1 (INT32, 1) => 0 offline replicas
+                    *ptr++ = 0; // # Empty tag buffer
+
+                    write_int32_be(&ptr, 0x00000df8); // Topic Authorized Operations
+                    *ptr++ = TAG_BUFFER;
+                    *ptr++ = 0xFF; // Next Cursor (0xff, indicating a null value.)
+                    *ptr++ = TAG_BUFFER;
+                                    
+                } else
+                {
+                    write_int16_be(&ptr, 3); // (UNKNOWN_TOPIC)
+                    copy_bytes(&ptr, &req_buf[topic_offset], topic_name.length()+1);
+                    for (int i = 0; i < 16; ++i) // topic_id
+                        *ptr++ = 0;
+                    
+                    *ptr++ = 0; // topic.is_internal
+                    *ptr++ = 1; // topic.partition
+                    write_int32_be(&ptr, 0x00000df8); // Topic Authorized Operations
+                    *ptr++ = TAG_BUFFER;
+                    *ptr++ = 0xFF; // Next Cursor (0xff, indicating a null value.)
+                    *ptr++ = TAG_BUFFER;
+                }
+            }
+
+            if (request_api_key == 0x0012) // API Versions
+            {
+                write_int16_be(&ptr, error_code);
+                int8_t num_api_keys = 1 + 2; // 1 + # of elements because 0 is null array and 1 is empty array
+                *ptr++ = num_api_keys;
+                copy_bytes(&ptr, &req_buf[req_api_offset], 2); // api_key
+                write_int16_be(&ptr, 0);                       // min_ver
+                write_int16_be(&ptr, request_api_version);     // max_ver
+                *ptr++ = TAG_BUFFER;                      // array_end
+
+                write_int16_be(&ptr, 75); // api_key ( DescribeTopicPartitions )
+                write_int16_be(&ptr, 0);  // min_ver
+                write_int16_be(&ptr, 0);  // max_ver
+                *ptr++ = TAG_BUFFER; // array_end
+
+                write_int32_be(&ptr, 0); // throttle_time_ms
+                *ptr++ = TAG_BUFFER;
+            }
+
+
+                int message_size = ptr - resp_buf;
+                ptr = resp_buf;
+                write_int32_be(&ptr, message_size - 4);
+
+                write(client_fd, resp_buf, message_size);
+            }
+
+        close(client_fd);
     }
-    // Read the request
-    size_t RESPONSE_MAX_SIZE = 1024;
-    void* buff = malloc(RESPONSE_MAX_SIZE);
-    
-    ssize_t bytes_read = read(client_fd, buff, RESPONSE_MAX_SIZE);
 
-
-    printf("Read %ld bytes.\n", bytes_read);
-
-    uint32_t message_size_nw =  *((uint32_t*) buff);
-    int32_t  message_size = ntohl(message_size_nw);
-
-    uint16_t* cursor =  (uint16_t*) buff;
-
-    cursor += 2;
-    uint16_t api_key_nw =  *((uint16_t*) cursor);
-    int16_t api_key = ntohs(api_key_nw);
-
-    cursor += 1;
-    uint16_t api_version_nw =  *((uint16_t*) cursor);
-    int16_t api_version = ntohs(api_version_nw);
-
-    cursor += 1;
-
-    uint32_t correlation_id_nw = *((uint32_t*) cursor);
-    int32_t correlation_id = ntohl(correlation_id_nw);
-
-
-    // printf("message_size: %d at addr %ld\n", message_size, buff);
-    // printf("api_key: %d at addr %ld\n", api_key, cursor);
-    // printf("api_version: %d at addr %ld\n", api_version, cursor);
-    // printf("correlation_id: %d at addr %ld\n", correlation_id, cursor);
-
-    // char* tmp = (char*) buff;
-
-    // for (size_t i  = 0; i < 10; i++) {
-    //     printf("%ld: byte %ld, %d\n",tmp, i,*tmp);
-    //     tmp++;
-    // }
-
-    free(buff);
-
-    // Tag buffer
-
-    uint8_t tag_buffer = 0x00;
-
-    // Error code
-
-    uint16_t error_code = 0;
-
-    // Check API-version
-    if (api_version < 0) error_code = 35;
-    if (api_version > 4) error_code = 35;
-
-    uint16_t error_code_nw = htons(error_code);
-
-    // Throttle time
-
-    uint32_t throttle_time_ms = htonl(10);
-
-    // API-keys
-
-    uint16_t api_versions[] = {
-        htons(18),
-        htons(0),
-        htons(4)
-    };
-
-    uint8_t num_of_api_keys = 1 + 1;
-
-    // Message size
-
-    uint32_t response_size = htonl(
-        sizeof(correlation_id) +
-        sizeof(error_code) + 
-        sizeof(num_of_api_keys) +
-        sizeof(api_versions) +
-        sizeof(tag_buffer) +
-        sizeof(throttle_time_ms) +
-        sizeof(tag_buffer)
-    );
-
-    // Send response
-    ssize_t bytes_sent = 0;
-    bytes_sent += send(client_fd, &response_size, sizeof(response_size), 0);
-    bytes_sent += send(client_fd, &correlation_id_nw, sizeof(correlation_id_nw), 0);
-    bytes_sent += send(client_fd, &error_code_nw , sizeof(error_code), 0);
-    bytes_sent += send(client_fd, &num_of_api_keys, sizeof(num_of_api_keys), 0);
-    bytes_sent += send(client_fd, &api_versions, sizeof(api_versions), 0);
-    bytes_sent += send(client_fd, &tag_buffer, sizeof(tag_buffer), 0);
-    bytes_sent += send(client_fd, &throttle_time_ms, sizeof(throttle_time_ms), 0);
-    bytes_sent += send(client_fd, &tag_buffer, sizeof(tag_buffer), 0);
-
-    
-
-
-    if (bytes_sent == -1) {
-        throw std::runtime_error("Failed to send response");
-    }
-    printf("Sent %ld bytes.\n", bytes_sent);
-
-
-    // Wrap-up
-    close(client_fd);
     close(server_fd);
     return 0;
+}
+
+void DescribeTopicPartitionsResponse(uint8_t *ptr)
+{
+    
 }
