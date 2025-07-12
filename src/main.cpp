@@ -313,7 +313,6 @@ int main(int argc, char *argv[])
                 uint8_t metadata[1024];
                 size_t total_bytes_in_log = read(log_fd, metadata, 1024);
                 constexpr int log_topic_offset = 162;
-
                 for (int8_t i = 1; i < topic_length; ++i)
                 {
                     copy_bytes(&ptr, req_buf + topic_offset, 16);
@@ -328,7 +327,7 @@ int main(int argc, char *argv[])
 
                     while (curr_log_idx < total_bytes_in_log)
                     {
-                        int batch_length_idx = curr_log_idx + 8; //  Batch Length (4 bytes)
+                        int batch_length_idx = curr_log_idx + 8;
                         int32_t batch_len = ((uint8_t)metadata[batch_length_idx + 0] >> 24 |
                                              (uint8_t)metadata[batch_length_idx + 1] >> 16 |
                                              (uint8_t)metadata[batch_length_idx + 2] >> 8 |
