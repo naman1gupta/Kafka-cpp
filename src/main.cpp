@@ -274,7 +274,7 @@ int main(int argc, char *argv[])
                             *ptr++ = 0;              // # Empty tag buffer
                         }
 
-                        write_int32_be(&ptr, 0x00000df8); // Topic Authorized Operations
+                        write_int32_be(&ptr, 0x00000df8); 
                         *ptr++ = TAG_BUFFER;
                     }
                     else
