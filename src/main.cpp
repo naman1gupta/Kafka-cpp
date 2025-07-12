@@ -429,7 +429,6 @@ int main(int argc, char *argv[])
         std::cout.flush();
         close(client_fd);
     }
-
     close(server_fd);
     return 0;
 }
