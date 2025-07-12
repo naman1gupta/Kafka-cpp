@@ -425,7 +425,6 @@ int main(int argc, char *argv[])
 
             write(client_fd, resp_buf, message_size);
         }
-
         fflush(stdout);
         std::cout.flush();
         close(client_fd);
